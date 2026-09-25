@@ -22,6 +22,11 @@ venv/
 .coverage
 htmlcov/
 
+# uv is only used as a helper to run `mcp dev` (the Inspector); we manage
+# dependencies via pip/pyproject.toml, so its auto-generated lockfile isn't
+# something we track.
+uv.lock
+
 # Editor / OS
 .DS_Store
 .vscode/
