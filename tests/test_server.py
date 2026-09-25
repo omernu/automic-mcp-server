@@ -14,7 +14,13 @@ from automic_mcp.server import mcp
 async def test_expected_tools_are_registered() -> None:
     tools = await mcp.list_tools()
     names = {t.name for t in tools}
-    assert names == {"ping_automic", "search_objects", "get_object"}
+    assert names == {
+        "ping_automic",
+        "search_objects",
+        "get_object",
+        "list_executions",
+        "get_job_statistics",
+    }
 
 
 async def test_get_object_tool_schema_requires_object_name() -> None:
@@ -54,3 +60,24 @@ async def test_search_objects_end_to_end_through_mcp_call_tool() -> None:
     content_blocks, structured = result
     assert structured == fixture
     assert content_blocks[0].text  # human-readable text form is still present
+
+
+async def test_get_job_statistics_end_to_end_through_mcp_call_tool() -> None:
+    fixture = {
+        "data": [
+            {"run_id": 1, "status_text": "ENDED_OK - ok.", "runtime": 30},
+            {"run_id": 2, "status_text": "ENDED_NOT_OK - failed.", "runtime": 5},
+        ],
+        "total": 2,
+        "hasmore": False,
+    }
+
+    with respx.mock(base_url="https://automic.example.com:8088/ae/api/v1") as mock:
+        mock.get("/100/executions").mock(return_value=httpx.Response(200, json=fixture))
+        result = await mcp.call_tool("get_job_statistics", {"object_name": "DAILY*"})
+
+    _, structured = result
+    assert structured["sample_size"] == 2
+    assert structured["success_count"] == 1
+    assert structured["failure_count"] == 1
+    assert structured["truncated"] is False

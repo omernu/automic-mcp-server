@@ -143,3 +143,87 @@ async def test_get_object_not_found_raises(settings: AutomicSettings) -> None:
         async with AutomicClient(settings) as client:
             with pytest.raises(httpx.HTTPStatusError):
                 await client.get_object("NO.SUCH.OBJECT")
+
+
+def _fake_execution(run_id: int) -> dict:
+    return {"run_id": run_id, "name": "DAILY_BACKUP", "status_text": "ENDED_OK - ok."}
+
+
+async def test_list_executions_builds_expected_query_params(settings: AutomicSettings) -> None:
+    with respx.mock(base_url=settings.base_url) as mock:
+        route = mock.get(f"/{settings.client_id}/executions").mock(
+            return_value=httpx.Response(200, json={"data": [], "total": 0, "hasmore": False})
+        )
+        async with AutomicClient(settings) as client:
+            await client.list_executions(
+                object_name="DAILY*",
+                object_types=["JOBS", "JOBP"],
+                time_frame_from="2026-09-01T00:00:00Z",
+                time_frame_to="2026-09-02T00:00:00Z",
+                max_results=10,
+                start_at_run_id=42,
+            )
+
+    sent = route.calls.last.request.url.params
+    assert sent["name"] == "DAILY*"
+    assert sent["type"] == "JOBS,JOBP"  # comma-joined, not repeated params
+    assert sent["time_frame_from"] == "2026-09-01T00:00:00Z"
+    assert sent["time_frame_to"] == "2026-09-02T00:00:00Z"
+    assert sent["time_frame_option"] == "activation"
+    assert sent["max_results"] == "10"
+    assert sent["start_at_run_id"] == "42"
+
+
+async def test_iter_executions_pages_through_multiple_pages(settings: AutomicSettings) -> None:
+    page_1 = [_fake_execution(run_id) for run_id in range(110, 100, -1)]  # 110..101, 10 items
+    page_2 = [_fake_execution(run_id) for run_id in range(100, 94, -1)]  # 100..95, 6 items
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        start_at = request.url.params.get("start_at_run_id")
+        if start_at is None:
+            return httpx.Response(200, json={"data": page_1, "total": 16, "hasmore": True})
+        return httpx.Response(200, json={"data": page_2, "total": 16, "hasmore": False})
+
+    with respx.mock(base_url=settings.base_url) as mock:
+        mock.get(f"/{settings.client_id}/executions").mock(side_effect=handler)
+        async with AutomicClient(settings) as client:
+            run_ids = [e["run_id"] async for e in client.iter_executions(max_total=100)]
+
+    assert run_ids == list(range(110, 94, -1))  # all 16, in order, no duplicates
+
+
+async def test_iter_executions_stops_at_max_total_without_fetching_extra_pages(
+    settings: AutomicSettings,
+) -> None:
+    calls = 0
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        data = [_fake_execution(run_id) for run_id in range(100, 90, -1)]  # 10 items
+        return httpx.Response(200, json={"data": data, "total": 100, "hasmore": True})
+
+    with respx.mock(base_url=settings.base_url) as mock:
+        mock.get(f"/{settings.client_id}/executions").mock(side_effect=handler)
+        async with AutomicClient(settings) as client:
+            run_ids = [e["run_id"] async for e in client.iter_executions(max_total=5)]
+
+    assert len(run_ids) == 5
+    assert calls == 1  # first page already had enough - no second request made
+
+
+async def test_iter_executions_stops_if_pagination_makes_no_progress(
+    settings: AutomicSettings,
+) -> None:
+    # Simulates the case where start_at_run_id doesn't behave as expected
+    # and the "next" page repeats the same items - must not loop forever.
+    same_page = [_fake_execution(run_id) for run_id in range(100, 95, -1)]  # 5 items
+
+    with respx.mock(base_url=settings.base_url) as mock:
+        mock.get(f"/{settings.client_id}/executions").mock(
+            return_value=httpx.Response(200, json={"data": same_page, "total": 999, "hasmore": True})
+        )
+        async with AutomicClient(settings) as client:
+            run_ids = [e["run_id"] async for e in client.iter_executions(max_total=100)]
+
+    assert run_ids == list(range(100, 95, -1))  # only the first page's items, not looped forever

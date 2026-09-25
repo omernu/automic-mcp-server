@@ -1,11 +1,12 @@
 """Thin async HTTP client for the Automic AE REST API.
 
-Stage 2 scope: read-only calls only (ping, search, get a single object).
+Read-only calls only (ping, search, get a single object, list executions).
 No calls that create/modify/delete/execute anything.
 """
 
 import base64
 import warnings
+from collections.abc import AsyncIterator
 from types import TracebackType
 from typing import Any, Self
 from urllib.parse import quote
@@ -114,3 +115,87 @@ class AutomicClient:
         response = await self._http.get(f"/{self._settings.client_id}/objects/{encoded_name}")
         response.raise_for_status()
         return response.json()
+
+    async def list_executions(
+        self,
+        object_name: str | None = None,
+        object_types: list[str] | None = None,
+        time_frame_from: str | None = None,
+        time_frame_to: str | None = None,
+        max_results: int = 50,
+        start_at_run_id: int | None = None,
+    ) -> dict[str, Any]:
+        params: dict[str, Any] = {"max_results": max_results}
+        if object_name:
+            params["name"] = object_name
+        if object_types:
+            # The API expects a single comma-separated value here, not a
+            # repeated query param - httpx would repeat the param if we
+            # passed a list directly, which doesn't match what the docs
+            # describe for this field.
+            params["type"] = ",".join(object_types)
+        if time_frame_from:
+            params["time_frame_from"] = time_frame_from
+        if time_frame_to:
+            params["time_frame_to"] = time_frame_to
+        if time_frame_from or time_frame_to:
+            params["time_frame_option"] = "activation"
+        if start_at_run_id is not None:
+            params["start_at_run_id"] = start_at_run_id
+
+        response = await self._http.get(
+            f"/{self._settings.client_id}/executions", params=params
+        )
+        response.raise_for_status()
+        return response.json()
+
+    async def iter_executions(
+        self,
+        object_name: str | None = None,
+        object_types: list[str] | None = None,
+        time_frame_from: str | None = None,
+        time_frame_to: str | None = None,
+        page_size: int = 50,
+        max_total: int = 500,
+    ) -> AsyncIterator[dict[str, Any]]:
+        """Yield up to max_total executions, paging through the API.
+
+        The API docs describe start_at_run_id as "RunID > this value" while
+        also saying results are sorted descending - an apparent
+        contradiction we haven't been able to verify against a real,
+        multi-page result set yet. To stay safe regardless of which way it
+        actually behaves, we track the run_ids seen so far and stop (rather
+        than loop forever or double-count) the moment a "next" page fails to
+        introduce any new run_id.
+        """
+        seen_run_ids: set[int] = set()
+        start_at_run_id: int | None = None
+        fetched = 0
+
+        while fetched < max_total:
+            page = await self.list_executions(
+                object_name=object_name,
+                object_types=object_types,
+                time_frame_from=time_frame_from,
+                time_frame_to=time_frame_to,
+                max_results=min(page_size, max_total - fetched),
+                start_at_run_id=start_at_run_id,
+            )
+            items = page.get("data", [])
+            if not items:
+                return
+
+            new_items = [item for item in items if item.get("run_id") not in seen_run_ids]
+            if not new_items:
+                return  # pagination made no progress - stop rather than loop
+
+            for item in new_items:
+                seen_run_ids.add(item["run_id"])
+                yield item
+                fetched += 1
+                if fetched >= max_total:
+                    return
+
+            if not page.get("hasmore"):
+                return
+            start_at_run_id = items[-1]["run_id"]

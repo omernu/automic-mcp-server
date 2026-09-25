@@ -7,10 +7,14 @@ dependencies = [
     # Pinned to <2: mcp 2.x renamed FastMCP to MCPServer and changed its API.
     # We're building against the FastMCP-based v1 API on purpose.
     "mcp[cli]>=1.2.0,<2",
-    # Already pulled in transitively by mcp; declared directly because our
-    # own code imports them (automic_client.py, config.py).
+    # Already pulled in transitively by mcp/pydantic; declared directly
+    # because our own code imports them (automic_client.py, config.py,
+    # stats.py).
     "httpx>=0.27",
     "pydantic-settings>=2.4",
+    # typing_extensions.TypedDict (not typing.TypedDict) is required by
+    # pydantic for TypedDict schema generation on Python < 3.12.
+    "typing-extensions>=4.10",
 ]
 
 [project.optional-dependencies]
