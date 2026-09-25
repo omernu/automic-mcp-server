@@ -1,0 +1,17 @@
+[project]
+name = "automic-mcp-server"
+version = "0.1.0"
+description = "MCP server for Broadcom Automic Automation Engine REST API"
+requires-python = ">=3.10"
+dependencies = [
+    # Pinned to <2: mcp 2.x renamed FastMCP to MCPServer and changed its API.
+    # We're building against the FastMCP-based v1 API on purpose.
+    "mcp[cli]>=1.2.0,<2",
+]
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]
