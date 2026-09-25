@@ -31,3 +31,7 @@ uv.lock
 .DS_Store
 .vscode/
 .idea/
+
+# Internal Automic AE REST API spec - not committed (infrastructure details
+# of a non-exposed internal server), used only as a local reference.
+/reference/
