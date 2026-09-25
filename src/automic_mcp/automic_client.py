@@ -1,7 +1,10 @@
 """Thin async HTTP client for the Automic AE REST API.
 
-Read-only calls only (ping, search, get a single object, list executions).
-No calls that create/modify/delete/execute anything.
+Mostly read-only (ping, search, get a single object, list executions), plus
+one call that changes state: execute_object. execute_object performs no
+guardrail checks itself (allowlist, confirmation token, cooldown) - those
+live in guardrails.py and server.py, in front of this call. This class
+trusts its caller.
 """
 
 import base64
@@ -199,3 +202,20 @@ class AutomicClient:
             if not page.get("hasmore"):
                 return
             start_at_run_id = items[-1]["run_id"]
+
+    async def execute_object(
+        self, object_name: str, inputs: dict[str, Any] | None = None
+    ) -> dict[str, Any]:
+        """Run object_name immediately (execution_option="execute" - no
+        scheduling for a later time, no recurring execution). Returns
+        {"run_id": int}.
+
+        No guardrail checks here by design - see the module docstring.
+        """
+        body: dict[str, Any] = {"object_name": object_name, "execution_option": "execute"}
+        if inputs:
+            body["inputs"] = inputs
+
+        response = await self._http.post(f"/{self._settings.client_id}/executions", json=body)
+        response.raise_for_status()
+        return response.json()

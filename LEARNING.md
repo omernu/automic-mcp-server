@@ -228,4 +228,76 @@
 בסביבה (ברירת המחדל הפנימית של `page_size`).
 
 ## שלב 4 — הרצת ג'ובים עם הגנות
-<!-- למלא לאחר סיום השלב -->
+
+- **עיצוב שנבחר (אחרי דיון ואישור מפורש)**: רק הרצה מיידית (`execution_option:
+  "execute"`) — לא `once`/`recurring`, כי הרצה חוזרת יוצרת משהו שממשיך
+  לפעול מעצמו בלי אישור נוסף. זרימת אישור דו-שלבית עם token, לא דגל
+  `confirm=true` פשוט — token חד-פעמי עם תפוגה הרבה יותר קשה "לעקוף
+  בטעות" מאשר פרמטר בוליאני שקל לשכוח/להתעלם ממנו.
+- **חמש שכבות הגנה, כל אחת עצמאית** (defense in depth — אף אחת מהן
+  לבד לא מספיקה): (1) מתג מאסטר כבוי כברירת מחדל
+  (`AUTOMIC_ALLOW_EXECUTE`), (2) allowlist מפורש (שמות/wildcards דרך
+  `AUTOMIC_EXECUTE_ALLOWLIST` — allowlist ריק = כלום לא מורשה, לא
+  ברירת-מחדל "הכל מותר"), (3) token חד-פעמי עם תפוגה מ-`preview_execution`,
+  (4) cooldown בין הרצות מוצלחות (הגנה מפני לולאות), (5) לוג audit מקומי
+  לכל ניסיון — גם כאלה שנחסמו.
+- **הפרדת שכבות (כמו בשלב 3)**: `guardrails.py` הוא קוד טהור וניתן
+  לבדיקה בלי HTTP/MCP — `TokenStore`, `Cooldown`, `matches_allowlist`.
+  כל פונקציה מקבלת `now` כפרמטר מפורש (במקום לקרוא ל-`time.time()`
+  בפנים) כדי שטסטים יוכלו לבדוק תפוגה/cooldown בלי `sleep` אמיתי —
+  לדוגמה `test_token_valid_at_exact_ttl_boundary_is_expired`.
+- **בדיקה ל"בלי התקדמות" ב-token store**: `TokenStore.consume()` תמיד
+  מסיר את ה-token (גם אם פג תוקף) — כלומר גם ניסיון עם token פג לא
+  "נשאר תקוע" בעץ הנתונים. חד-פעמי אמיתי: גם קריאה כושלת צורכת את
+  ה-token.
+- **גילוי משמעותי**: `mcp.call_tool()` (קריאה ישירה ל-object של
+  FastMCP, in-process — מה שהשתמשנו בו בטסטים) **זורק** exception
+  (`mcp.server.fastmcp.exceptions.ToolError`) כשכלי נכשל, בעוד שכשעוברים
+  דרך הפרוטוקול המלא (stdio/JSON-RPC, כמו שבדקנו ב`automic-mcp-server`
+  כתת-תהליך) מקבלים תשובה תקנית עם `isError: true` (מה שראינו כבר
+  בשלב 2). זו לא סתירה — שתי שכבות שונות של ה-SDK, וצריך לדעת איזו
+  שכבה בודקים כדי לכתוב `pytest.raises` נכון.
+- **`fnmatch.fnmatchcase`** ל-allowlist wildcards — case-sensitive
+  בכוונה (שמות אובייקטים ב-AE הם conventionally uppercase; לא רצינו
+  ש-`daily_backup` "יזלוג" דרך allowlist שמכיל `DAILY_BACKUP`).
+- **`conftest.py` חדש**: העברנו fixtures משותפים (`_fake_automic_env`,
+  ואיפוס ה-state הגלובלי של `_token_store`/`_cooldown` בין טסטים) לקובץ
+  משותף — כי עכשיו שני קבצי טסט (`test_server.py`,
+  `test_execute_guardrails.py`) צריכים אותם, ו-state גלובלי במודול
+  `server.py` (בכוונה, כדי לשרוד בין קריאות כלי בתוך תהליך שרת חי)
+  חייב איפוס מפורש בין טסטים כדי לא "לדלוף" בין מקרי בדיקה.
+- **אומת live (המקרה הבסיסי)**: קראנו ל-`preview_execution` דרך stdio
+  אמיתי מול ה-`.env` האמיתי (בלי `AUTOMIC_ALLOW_EXECUTE=true` מוגדר
+  שם) — וקיבלנו בדיוק את חסימת ברירת-המחדל הצפויה
+  (`"Execution is disabled..."`) עם `isError: true`.
+
+### תקלה: הטסטים כתבו לקובץ ה-audit log **האמיתי**
+כשהמשתמש ניסה live flow אמיתי (`preview_execution` על
+`JOBS.PYTHON.WIN.NEW.1` ואז `execute_object`) וקיבל `"Invalid or expired
+confirmation_token"`, הסתכלנו ב-`logs/executions.jsonl` כדי לאבחן — ומצאנו
+שם עשרות רשומות זרות עם timestamps צמודים במילישניות, בדיוק תואמות
+לתרחישי הטסטים ב-`test_execute_guardrails.py`. הסיבה: `AUTOMIC_AUDIT_LOG_PATH`
+לא היה override-ד בטסטים, אז `get_settings()` נפל חזרה לברירת המחדל
+(`logs/executions.jsonl`, יחסי ל-cwd) — **אותו קובץ בדיוק שהשרת האמיתי
+כותב אליו** כשמריצים `pytest` מתיקיית הפרויקט. כל הרצת טסטים "זיהמה"
+את הלוג התפעולי האמיתי.
+
+**התיקון**: הוספנו ל-`_fake_automic_env` (ב-`conftest.py`) קביעה של
+`AUTOMIC_AUDIT_LOG_PATH` לנתיב זמני (`tmp_path` של pytest) — כמו שכבר
+עשינו לפני כן ל-`.env` עם `_env_file=None`. **לקח חוזר**: כל דבר
+שנטען/נכתב מקובץ/נתיב חיצוני (config, logs, ...) הוא מקור פוטנציאלי
+לזליגה בין טסטים לסביבה האמיתית, וצריך לבודד אותו במפורש — לא להניח
+ש"ברירת המחדל תהיה בסדר".
+
+**חשוב**: אחרי התיקון, הלוג שהראה בפועל את ניסיון המשתמש (13:16:42
+preview → 13:16:53 execute, כ-11.7 שניות ביניהם — **הרבה בתוך** ה-TTL
+של 120 שניות) התברר כאמין: זו לא הייתה תקלת timeout. **הסיבה האמיתית
+נמצאה**: טעות אנוש פשוטה — המשתמש הדביק בטעות את **שם הג'וב** בתוך
+שדה `confirmation_token` (שני שדות טקסט נפרדים בממשק ה-Inspector, קל
+לבלבל ביניהם). זה בעצם **הוכיח שההגנה עובדת נכון** — token לא-תקין
+נדחה בדיוק כמו שצריך, גם אם הסיבה לאי-התקינות הייתה טעות הקלדה ולא
+תפוגה/reconnect.
+
+**live flow מלא הצליח** בניסיון חוזר: `preview_execution` →
+`execute_object` עם ה-token הנכון → `run_id` אמיתי חזר מ-Automic.
+זו הפעם הראשונה שהפרויקט הריץ בפועל אובייקט אמיתי במערכת.

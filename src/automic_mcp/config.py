@@ -38,6 +38,32 @@ class AutomicSettings(BaseSettings):
             return f"{self.username}/{self.department}"
         return self.username
 
+    # --- Stage 4: guardrails for executing objects ---
+
+    allow_execute: bool = False
+    """Master switch for the execute_object tool. Off by default - the
+    capability must be explicitly turned on, even if the tool is registered
+    on the server."""
+
+    execute_allowlist: str = ""
+    """Comma-separated object names/wildcard patterns (e.g. "*" excluded on
+    purpose - be specific) allowed to be executed. Empty means nothing is
+    allowed, even if allow_execute is true."""
+
+    execute_confirmation_ttl_seconds: int = 120
+    """How long a preview_execution confirmation token stays valid."""
+
+    execute_cooldown_seconds: int = 5
+    """Minimum time between successful executions, to blunt runaway loops."""
+
+    audit_log_path: str = "logs/executions.jsonl"
+    """Local, gitignored append-only log of every execution attempt
+    (allowed or denied)."""
+
+    @property
+    def execute_allowlist_patterns(self) -> tuple[str, ...]:
+        return tuple(p.strip() for p in self.execute_allowlist.split(",") if p.strip())
+
 
 @lru_cache
 def get_settings() -> AutomicSettings:

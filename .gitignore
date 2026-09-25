@@ -32,6 +32,12 @@ uv.lock
 .vscode/
 .idea/
 
+# Claude Code local runtime state - not part of the project.
+.claude/
+
 # Internal Automic AE REST API spec - not committed (infrastructure details
 # of a non-exposed internal server), used only as a local reference.
 /reference/
+
+# Local execution audit log (stage 4) - operational data, not source.
+/logs/

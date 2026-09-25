@@ -1,13 +1,14 @@
-"""Stage 2 tests: the tools are registered correctly on the FastMCP server,
-and an end-to-end call through FastMCP -> AutomicClient -> httpx works
-against a mocked Automic API (no real network call).
+"""Stage 2/3 tests: the tools are registered correctly on the FastMCP
+server, and an end-to-end call through FastMCP -> AutomicClient -> httpx
+works against a mocked Automic API (no real network call).
+
+Shared fixtures (_fake_automic_env, _reset_execution_guardrail_state) live
+in conftest.py - also used by test_execute_guardrails.py.
 """
 
 import httpx
-import pytest
 import respx
 
-from automic_mcp.config import get_settings
 from automic_mcp.server import mcp
 
 
@@ -20,6 +21,8 @@ async def test_expected_tools_are_registered() -> None:
         "get_object",
         "list_executions",
         "get_job_statistics",
+        "preview_execution",
+        "execute_object",
     }
 
 
@@ -27,23 +30,6 @@ async def test_get_object_tool_schema_requires_object_name() -> None:
     tools = await mcp.list_tools()
     tool = next(t for t in tools if t.name == "get_object")
     assert tool.inputSchema["required"] == ["object_name"]
-
-
-@pytest.fixture(autouse=True)
-def _fake_automic_env(monkeypatch: pytest.MonkeyPatch):
-    monkeypatch.setenv("AUTOMIC_BASE_URL", "https://automic.example.com:8088/ae/api/v1")
-    monkeypatch.setenv("AUTOMIC_CLIENT_ID", "100")
-    monkeypatch.setenv("AUTOMIC_USERNAME", "testuser")
-    monkeypatch.setenv("AUTOMIC_PASSWORD", "testpass")
-    # Explicit, even though it's the field default: get_settings() still
-    # falls back to the developer's real local .env for any var not set
-    # here, which made this fixture's behavior depend on that file's
-    # contents (see AutomicSettings(_env_file=None, ...) in
-    # test_automic_client.py for the same issue on that other path).
-    monkeypatch.setenv("AUTOMIC_VERIFY_SSL", "true")
-    get_settings.cache_clear()
-    yield
-    get_settings.cache_clear()
 
 
 async def test_search_objects_end_to_end_through_mcp_call_tool() -> None:

@@ -227,3 +227,46 @@ async def test_iter_executions_stops_if_pagination_makes_no_progress(
             run_ids = [e["run_id"] async for e in client.iter_executions(max_total=100)]
 
     assert run_ids == list(range(100, 95, -1))  # only the first page's items, not looped forever
+
+
+async def test_execute_object_sends_execute_option_and_returns_run_id(
+    settings: AutomicSettings,
+) -> None:
+    with respx.mock(base_url=settings.base_url) as mock:
+        route = mock.post(f"/{settings.client_id}/executions").mock(
+            return_value=httpx.Response(200, json={"run_id": 1001345})
+        )
+        async with AutomicClient(settings) as client:
+            result = await client.execute_object("DAILY_BACKUP", inputs={"FOO": "bar"})
+
+    sent_body = json.loads(route.calls.last.request.content)
+    assert sent_body == {
+        "object_name": "DAILY_BACKUP",
+        "execution_option": "execute",
+        "inputs": {"FOO": "bar"},
+    }
+    assert result == {"run_id": 1001345}
+
+
+async def test_execute_object_omits_inputs_key_when_not_given(
+    settings: AutomicSettings,
+) -> None:
+    with respx.mock(base_url=settings.base_url) as mock:
+        route = mock.post(f"/{settings.client_id}/executions").mock(
+            return_value=httpx.Response(200, json={"run_id": 1})
+        )
+        async with AutomicClient(settings) as client:
+            await client.execute_object("DAILY_BACKUP")
+
+    sent_body = json.loads(route.calls.last.request.content)
+    assert "inputs" not in sent_body
+
+
+async def test_execute_object_error_raises(settings: AutomicSettings) -> None:
+    with respx.mock(base_url=settings.base_url) as mock:
+        mock.post(f"/{settings.client_id}/executions").mock(
+            return_value=httpx.Response(400, json={"message": "invalid object"})
+        )
+        async with AutomicClient(settings) as client:
+            with pytest.raises(httpx.HTTPStatusError):
+                await client.execute_object("NOT.AN.OBJECT")
